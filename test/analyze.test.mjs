@@ -53,3 +53,8 @@ test('inline code masking stays bounded on adversarial backticks',async()=>{
  const code=`import {analyze} from ${JSON.stringify(moduleUrl)};for(const input of ['\`'.repeat(500000),'\`a'.repeat(250000),Array.from({length:700},(_, i)=>'\`'.repeat(i+1)+'x').join('')])analyze(input);console.log('bounded');`;
  assert.equal(execFileSync(process.execPath,['--input-type=module','-e',code],{encoding:'utf8',timeout:3000}).trim(),'bounded');
 });
+test('CommonMark code spans crossing a newline do not create resource errors',()=>{
+  const md='## Install\nUse `an example\n![documented](./example.png)` here.\n![real](./real.png)';
+  const r=analyze(md,{files:[]});
+  assert.deepEqual(r.findings.map(f=>[f.rule,f.target,f.line]),[['npm-relative-image','./real.png',4],['missing-local-file','./real.png',4]]);
+});

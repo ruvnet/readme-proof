@@ -18,7 +18,7 @@ function maskInlineCode(line) {
     const run=line.slice(i,k);let j=k,end=-1;
     while((j=line.indexOf(run,j))!==-1){let e=j+run.length;if(line[e]!=='`'&&line[j-1]!=='`'){end=e;break;}while(line[e]==='`')e++;j=e;}
     if(end===-1){out+=run;i=k;continue;}
-    out+=' '.repeat(end-i);i=end;
+    out+=line.slice(i,end).replace(/[^\n]/g,' ');i=end;
   }
   return out;
 }
@@ -34,16 +34,19 @@ export function analyze(markdown, options = {}) {
   const inventory = new Set(files.map(f=>f.replace(/^\.\//,'')));
   const findings=[], commands=[], lines=markdown.split(/\r?\n/);
   const add=(rule,severity,line,message,destination)=>{if(findings.length<500)findings.push({rule,severity,line,message,...(destination===undefined?{}:{target:destination})});};
-  const references=new Map();
+  const references=new Map(), proseLines=[];
   let fence=null;
   // References are collected outside fenced code, including definitions after usage.
   for(const line of lines) {
     const f=line.match(/^\s{0,3}(`{3,}|~{3,})(.*)$/);
-    if(f){if(!fence)fence={char:f[1][0],length:f[1].length};else if(f[1][0]===fence.char&&f[1].length>=fence.length&&!f[2].trim())fence=null;continue;}
-    if(fence)continue;
+    if(f){if(!fence)fence={char:f[1][0],length:f[1].length};else if(f[1][0]===fence.char&&f[1].length>=fence.length&&!f[2].trim())fence=null;proseLines.push('');continue;}
+    if(fence){proseLines.push('');continue;}
+    proseLines.push(line);
     const ref=line.match(/^\s{0,3}\[([^\[\]]+)\]:\s*(?:<([^>]+)>|(\S+))/);
     if(ref)references.set(ref[1].trim().replace(/\s+/g,' ').toLowerCase(),ref[2]??ref[3]);
   }
+  // A code span can cross a soft line break, but not a paragraph or fenced block.
+  const maskedLines=proseLines.join('\n').split(/(\n(?:[ \t]*\n)+)/).map((part,i)=>i%2?part:maskInlineCode(part)).join('').split('\n');
   fence=null; let install=false;
   const check=(url,line,image)=>{
     const value=url.trim();
@@ -72,7 +75,7 @@ export function analyze(markdown, options = {}) {
       }
       continue;
     }
-    const prose=maskInlineCode(line);
+    const prose=maskedLines[i];
     for(const match of prose.matchAll(/(!?)\[[^\[\]]*\]\(\s*(?:<([^>]+)>|([^\s()\[\]<>]+))(?:\s+[^()\[\]]*)?\)/g))check(match[2]??match[3],n,match[1]==='!');
     for(const match of prose.matchAll(/!\[([^\[\]]*)\](?:\[([^\[\]]*)\])?(?!\()/g)) {
       const key=(match[2]||match[1]).trim().replace(/\s+/g,' ').toLowerCase();
