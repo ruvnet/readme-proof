@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readSync,writeFileSync,realpathSync,openSync,closeSync,fstatSync,constants,lstatSync,existsSync } from 'node:fs';
-import {resolve,parse} from 'node:path';
+import {resolve,parse,dirname} from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { analyze } from './analyze.mjs';
 const safe=s=>String(s).replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g,'');
@@ -8,9 +8,13 @@ function readBounded(path) {
   const fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
   try{const stat=fstatSync(fd);if(!stat.isFile()||stat.size>1048576)throw Error('Input exceeds bound');const data=Buffer.alloc(1048577);let size=0;while(size<data.length){const count=readSync(fd,data,size,data.length-size,null);if(!count)break;size+=count;}if(size>1048576)throw Error('Input exceeds bound');return data.subarray(0,size).toString('utf8');}finally{closeSync(fd);}
 }
+// macOS ships /tmp, /var and /etc as symlinks into /private, so refusing every symlink
+// refused every temp path. Only root can own a symlink, so a root-owned link in a
+// root-owned directory nobody else can write is the OS's, not one a user planted.
+function systemSymlink(path,stat){if(stat.uid!==0)return false;const parent=lstatSync(dirname(path));return parent.uid===0&&(parent.mode&0o022)===0;}
 function writeOutput(path,value) {
   const absolute=resolve(path);let current=parse(absolute).root;
-  for(const component of absolute.slice(current.length).split('/').filter(Boolean)){current=resolve(current,component);if(existsSync(current)&&lstatSync(current).isSymbolicLink())throw Error('Output symlink');}
+  for(const component of absolute.slice(current.length).split('/').filter(Boolean)){current=resolve(current,component);if(!existsSync(current))continue;const stat=lstatSync(current);if(stat.isSymbolicLink()&&!systemSymlink(current,stat))throw Error('Output symlink');}
   writeFileSync(absolute,value,{flag:'wx',mode:0o600});
 }
 export function main(args) {
