@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile, writeFile, open, lstat } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { resolve, parse } from 'node:path';
+import { resolve, parse, dirname } from 'node:path';
 import init from '@ruvector/rvf-wasm';
 const hash = x => createHash('sha256').update(x).digest('hex');
 const MAX = 4 * 1024 * 1024;
@@ -53,12 +53,17 @@ async function bounded(path) {
     return bytes.subarray(0, size);
   } finally { await file.close(); }
 }
+async function systemParent(path) {
+  const parent = await lstat(dirname(path));
+  return parent.uid === 0 && (parent.mode & 0o022) === 0;
+}
 async function rejectSymlinks(path) {
   const absolute = resolve(path);
   let current = parse(absolute).root;
   for (const component of absolute.slice(current.length).split('/').filter(Boolean)) {
     current = resolve(current, component);
-    try { if ((await lstat(current)).isSymbolicLink()) throw new Error('Output symlink refused'); }
+    // Root-owned links in root-owned, non-shared directories are the OS's own (macOS /tmp, /var).
+    try { const stat = await lstat(current); if (stat.isSymbolicLink() && !(stat.uid === 0 && await systemParent(current))) throw new Error('Output symlink refused'); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
 }
