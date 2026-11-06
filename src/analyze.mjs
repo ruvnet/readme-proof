@@ -1,3 +1,27 @@
+// Downloaded code piped, substituted or evaluated into an interpreter, plus destructive commands.
+const fetcher='(?:curl|wget)\\b';
+const dangerPatterns=[
+  new RegExp('\\b'+fetcher+'[^\\n]*\\|\\s*(?:sudo\\s+)?(?:sh|bash|zsh|python3?|perl|ruby|node)\\b','i'),
+  new RegExp('[$<]\\(\\s*'+fetcher,'i'),
+  /\b(?:iex|Invoke-Expression)\b[^\n]*\b(?:irm|iwr|Invoke-RestMethod|Invoke-WebRequest|DownloadString)\b/i,
+  /\b(?:irm|iwr|Invoke-RestMethod|Invoke-WebRequest)\b[^\n]*\|\s*(?:iex|Invoke-Expression)\b/i,
+  /\b(?:rm\s+(?:-[a-zA-Z]*[rf][a-zA-Z]*\s+)+|git\s+(?:reset\s+--hard|clean\s+-[a-zA-Z]*f)|(?:sudo\s+)?mkfs\b|Remove-Item\b.*-Recurse|del\s+\/s)/i,
+];
+const dangerous=command=>dangerPatterns.some(pattern=>pattern.test(command));
+// Blank out inline code spans so `![x](y)` examples in prose are not treated as resources.
+function maskInlineCode(line) {
+  if(!line.includes('`'))return line;
+  let out='',i=0;
+  while(i<line.length){
+    if(line[i]!=='`'){out+=line[i++];continue;}
+    let k=i;while(k<line.length&&line[k]==='`')k++;
+    const run=line.slice(i,k);let j=k,end=-1;
+    while((j=line.indexOf(run,j))!==-1){let e=j+run.length;if(line[e]!=='`'&&line[j-1]!=='`'){end=e;break;}while(line[e]==='`')e++;j=e;}
+    if(end===-1){out+=run;i=k;continue;}
+    out+=line.slice(i,end).replace(/[^\n]/g,' ');i=end;
+  }
+  return out;
+}
 /** Static README checks. No commands, files or URLs are executed or fetched. */
 export function analyze(markdown, options = {}) {
   if (typeof markdown !== 'string' || new TextEncoder().encode(markdown).length > 1048576) throw new TypeError('README must be text at most 1 MiB');
@@ -10,23 +34,27 @@ export function analyze(markdown, options = {}) {
   const inventory = new Set(files.map(f=>f.replace(/^\.\//,'')));
   const findings=[], commands=[], lines=markdown.split(/\r?\n/);
   const add=(rule,severity,line,message,destination)=>{if(findings.length<500)findings.push({rule,severity,line,message,...(destination===undefined?{}:{target:destination})});};
-  const references=new Map();
+  const references=new Map(), proseLines=[];
   let fence=null;
   // References are collected outside fenced code, including definitions after usage.
   for(const line of lines) {
     const f=line.match(/^\s{0,3}(`{3,}|~{3,})(.*)$/);
-    if(f){if(!fence)fence={char:f[1][0],length:f[1].length};else if(f[1][0]===fence.char&&f[1].length>=fence.length&&!f[2].trim())fence=null;continue;}
-    if(fence)continue;
+    if(f){if(!fence)fence={char:f[1][0],length:f[1].length};else if(f[1][0]===fence.char&&f[1].length>=fence.length&&!f[2].trim())fence=null;proseLines.push('');continue;}
+    if(fence){proseLines.push('');continue;}
+    proseLines.push(line);
     const ref=line.match(/^\s{0,3}\[([^\[\]]+)\]:\s*(?:<([^>]+)>|(\S+))/);
     if(ref)references.set(ref[1].trim().replace(/\s+/g,' ').toLowerCase(),ref[2]??ref[3]);
   }
+  // A code span can cross a soft line break, but not a paragraph or fenced block.
+  const maskedLines=proseLines.join('\n').split(/(\n(?:[ \t]*\n)+)/).map((part,i)=>i%2?part:maskInlineCode(part)).join('').split('\n');
   fence=null; let install=false;
   const check=(url,line,image)=>{
     const value=url.trim();
     if(/^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(value))return;
     const path=value.split(/[?#]/,1)[0].replace(/^\.\//,'');
     if(image && target==='npm')add('npm-relative-image','error',line,'Use an absolute public image URL for npm README rendering.',value);
-    if(hasFiles && path && !inventory.has(path))add('missing-local-file','warning',line,'Relative resource is absent from the supplied file inventory.',value);
+    let decoded=path;try{decoded=decodeURIComponent(path);}catch{}
+    if(hasFiles && path && !inventory.has(path) && !inventory.has(decoded))add('missing-local-file','warning',line,'Relative resource is absent from the supplied file inventory.',value);
   };
   for(let i=0;i<lines.length;i++) {
     const line=lines[i], n=i+1, f=line.match(/^\s{0,3}(`{3,}|~{3,})(.*)$/);
@@ -37,20 +65,24 @@ export function analyze(markdown, options = {}) {
     }
     if(/\b(?:quick\s*start|install(?:ation)?|getting started|npm\s+(?:i|install)|pip(?:3)?\s+install|cargo\s+(?:add|install))\b/i.test(line))install=true;
     if(fence) {
-      if(['sh','bash','shell','zsh','console','powershell','ps1','cmd'].includes(fence.language)&&line.trim()&&!/^\s*#/.test(line)) {
-        const command=line.trim().replace(/^\$\s+/,''), danger=/\b(?:curl|wget)\b[^\n]*\|\s*(?:sudo\s+)?(?:sh|bash|zsh)\b/i.test(command)||/\b(?:rm\s+(?:-[a-zA-Z]*[rf][a-zA-Z]*\s+)+|git\s+(?:reset\s+--hard|clean\s+-[a-zA-Z]*f)|(?:sudo\s+)?mkfs\b|Remove-Item\b.*-Recurse|del\s+\/s)/i.test(command);
+      const shell=['sh','bash','shell','zsh','console','powershell','ps1','cmd'].includes(fence.language);
+      // Unlabeled fences are often shell too: scan them for dangerous commands without listing every line.
+      if((shell||fence.language==='')&&line.trim()&&!/^\s*#/.test(line)) {
+        const command=line.trim().replace(/^\$\s+/,''), danger=dangerous(command);
+        if(!shell&&!danger)continue;
         if(commands.length<500)commands.push({line:n,language:fence.language,command,risk:danger?'high':'review'});
         if(danger)add('dangerous-command','warning',n,'Command may execute downloaded code or destroy data. Review manually; never executed.');
       }
       continue;
     }
-    for(const match of line.matchAll(/(!?)\[[^\[\]]*\]\(\s*(?:<([^>]+)>|([^\s()\[\]<>]+))(?:\s+[^()\[\]]*)?\)/g))check(match[2]??match[3],n,match[1]==='!');
-    for(const match of line.matchAll(/!\[([^\[\]]*)\](?:\[([^\[\]]*)\])?(?!\()/g)) {
+    const prose=maskedLines[i];
+    for(const match of prose.matchAll(/(!?)\[[^\[\]]*\]\(\s*(?:<([^>]+)>|([^\s()\[\]<>]+))(?:\s+[^()\[\]]*)?\)/g))check(match[2]??match[3],n,match[1]==='!');
+    for(const match of prose.matchAll(/!\[([^\[\]]*)\](?:\[([^\[\]]*)\])?(?!\()/g)) {
       const key=(match[2]||match[1]).trim().replace(/\s+/g,' ').toLowerCase();
       if(references.has(key))check(references.get(key),n,true);
       else add('unresolved-image-reference','warning',n,'Image reference has no definition.',key);
     }
-    for(const match of line.matchAll(/<img\b[^<>]*\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^<>]*>/gi))check(match[1]??match[2]??match[3],n,true);
+    for(const match of prose.matchAll(/<img\b[^<>]*\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^<>]*>/gi))check(match[1]??match[2]??match[3],n,true);
   }
   if(fence)add('unclosed-fence','error',fence.line,'Code fence is not closed.');
   if(!install)add('missing-quickstart','warning',1,'Add installation or quickstart instructions.');
