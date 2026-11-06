@@ -4,16 +4,16 @@
 
 Check README portability and command risks before publishing a package. Get line numbered findings and a reviewable verification plan through a CLI, terminal view, browser or MCP server.
 
-**Published prerelease: [`0.1.0-next.0`](https://www.npmjs.com/package/readme-proof/v/0.1.0-next.0).** Static analysis does not execute README commands or prove that an installation succeeds. No model API key is required.
+**Published prerelease: [`0.1.0-next.1`](https://www.npmjs.com/package/readme-proof/v/0.1.0-next.1).** Static analysis does not execute README commands or prove that an installation succeeds. No model API key is required.
 
 ## Quick start
 
 Install the published prerelease:
 
 ```sh
-npx readme-proof@0.1.0-next.0 analyze README.md --target npm
-npx readme-proof@0.1.0-next.0 tui README.md
-npx readme-proof@0.1.0-next.0 plan README.md
+npx readme-proof@0.1.0-next.1 analyze README.md --target npm
+npx readme-proof@0.1.0-next.1 tui README.md
+npx readme-proof@0.1.0-next.1 plan README.md
 ```
 
 From a source checkout:
