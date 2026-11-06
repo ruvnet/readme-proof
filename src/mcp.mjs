@@ -8,7 +8,7 @@ const analyze = createAnalyzer();
 const receipts = new Map();
 let bytes=0;
 const prefix='ruv://readme-proof/evidence/';
-const server=new McpServer({name:'readme-proof',version:'0.1.0-next.0'},{capabilities:{resources:{}}});
+const server=new McpServer({name:'readme-proof',version:'0.1.0-next.1'},{capabilities:{resources:{}}});
 const shape={markdown:z.string().max(1048576),target:z.enum(['npm','github']).optional(),files:z.array(z.string().max(2048)).max(10000).optional()};
 function run({markdown,...options},plan=false){
  const report=analyze(markdown,options),receipt=createReceipt(report,markdown),text=JSON.stringify(receipt),size=Buffer.byteLength(text);
